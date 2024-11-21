@@ -110,9 +110,13 @@ class RTUBufferedPort extends EventEmitter {
             const maxOffset = bufferLength - EXCEPTION_LENGTH;
 
             for (let i = 0; i <= maxOffset; i++) {
-                const offset = self._id > 255 ? 2 : 0;                   
-                const unitId = offset === 2 ? self._buffer[offset + i - 1] * 256 + self._buffer[offset + i] : self._buffer[offset + i];
+                const offset = self._id > 255 ? 2 : 0;
+                const unitId = offset === 2 ? self._buffer[offset + i - 1] * 256 + self._buffer[offset + i] : self._buffer[i];
                 const functionCode = self._buffer[offset + i + 1];
+                console.log("unitId", unitId);
+                console.log("functionCode", functionCode);
+                console.log("self._id", self._id);
+                console.log("self._buffer[i]", self._buffer[i]);
 
                 if ((self._id > 255 && self._buffer[i] !== 0xfa) || unitId !== self._id) continue;
 
@@ -207,7 +211,7 @@ class RTUBufferedPort extends EventEmitter {
         if (offset === 2) {
             this._id = data[1] * 256 + data[2];
         } else {
-            this._id = data[1];
+            this._id = data[0];
         }
         this._cmd = data[offset + 1];
 
