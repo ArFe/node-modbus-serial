@@ -116,16 +116,19 @@ function _readFC2(data, next) {
  * @param {Function} next the function to call next.
  */
 function _readFC3or4(data, next) {
-    const length = data.readUInt8(2);
+    // console.log("data", data);
+    const offset = data.readUInt8(0) === 0xfa ? 5 : 3;
+
+    const length = data.readUInt8(offset - 1);
     const contents = [];
 
     for (let i = 0; i < length; i += 2) {
-        const reg = data.readUInt16BE(i + 3);
+        const reg = data.readUInt16BE(i + offset);
         contents.push(reg);
     }
 
     if (next)
-        next(null, { "data": contents, "buffer": data.slice(3, 3 + length) });
+        next(null, { "data": contents, "buffer": data.slice(offset, offset + length) });
 }
 
 /**
@@ -171,8 +174,9 @@ function _readFC5(data, next) {
  * @param {Function} next the function to call next.
  */
 function _readFC6(data, next) {
-    const dataAddress = data.readUInt16BE(2);
-    const value = data.readUInt16BE(4);
+    const offset = data.readUInt8(0) === 0xfa ? 2 : 0;
+    const dataAddress = data.readUInt16BE(offset + 2);
+    const value = data.readUInt16BE(offset + 4);
 
     if (next)
         next(null, { "address": dataAddress, "value": value });
@@ -201,8 +205,9 @@ function _readFC6Enron(data, next) {
  * @param {Function} next the function to call next.
  */
 function _readFC16(data, next) {
-    const dataAddress = data.readUInt16BE(2);
-    const length = data.readUInt16BE(4);
+    const offset = data.readUInt8(0) === 0xfa ? 2 : 0;
+    const dataAddress = data.readUInt16BE(offset + 2);
+    const length = data.readUInt16BE(offset + 4);
 
     if (next)
         next(null, { "address": dataAddress, "length": length });
@@ -356,6 +361,7 @@ function _cancelTimeout(timeoutHandle) {
  * @private
  */
 function _onReceive(data) {
+    console.log("data", data);
     const modbus = this;
     let error;
 
@@ -426,14 +432,15 @@ function _onReceive(data) {
     }
 
     // if crc is OK, read address and function code
-    const address = data.readUInt8(0);
-    const code = data.readUInt8(1);
+    const offset = data.readUInt8(0) === 0xfa ? 2 : 0;
+    const address = offset === 2 ? data.readUInt16BE(1) : data.readUInt8(0);
+    const code = data.readUInt8(offset + 1);
 
     /* check for modbus exception
      */
     if (data.length >= 5 &&
         code === (0x80 | transaction.nextCode)) {
-        const errorCode = data.readUInt8(2);
+        const errorCode = data.readUInt8(offset + 2);
         if (transaction.next) {
             error = new Error("Modbus exception " + errorCode + ": " + (modbusErrorMessages[errorCode] || "Unknown error"));
             error.modbusCode = errorCode;
@@ -811,13 +818,21 @@ class ModbusRTU extends EventEmitter {
             next: next
         };
 
-        const codeLength = 6;
+        const codeLength = address < 256 ? 6 : 8;
         const buf = Buffer.alloc(codeLength + 2); // add 2 crc bytes
 
-        buf.writeUInt8(address, 0);
-        buf.writeUInt8(code, 1);
-        buf.writeUInt16BE(dataAddress, 2);
-        buf.writeUInt16BE(length, 4);
+        let cnt = 0;
+        if (address > 255) {
+            buf.writeUInt8(0xfa, 0);
+            buf.writeUInt16BE(address, 1);
+            cnt = 2;
+            this._transactions[this._port._transactionIdWrite].nextLength += 2;
+        } else {
+            buf.writeUInt8(address, 0);
+        }
+        buf.writeUInt8(code, 1 + cnt);
+        buf.writeUInt16BE(dataAddress, 2 + cnt);
+        buf.writeUInt16BE(length, 4 + cnt);
 
         // add crc bytes to buffer
         buf.writeUInt16LE(crc16(buf.subarray(0, -2)), codeLength);
@@ -899,8 +914,9 @@ class ModbusRTU extends EventEmitter {
         }
 
         const code = 6;
+        const offset = address > 255 ? 2 : 0;
 
-        let valueSize = 8;
+        let valueSize = offset + 8;
         if (this._enron && !(dataAddress >= this._enronTables.shortRange[0] && dataAddress <= this._enronTables.shortRange[1])) {
             valueSize = 10;
         }
@@ -914,23 +930,28 @@ class ModbusRTU extends EventEmitter {
             next: next
         };
 
-        let codeLength = 6; // 1B deviceAddress + 1B functionCode + 2B dataAddress + (2B value | 4B value (enron))
+        let codeLength = offset + 6; // 1B deviceAddress + 1B functionCode + 2B dataAddress + (2B value | 4B value (enron))
         if (this._enron && !(dataAddress >= this._enronTables.shortRange[0] && dataAddress <= this._enronTables.shortRange[1])) {
             codeLength = 8;
         }
 
         const buf = Buffer.alloc(codeLength + 2); // add 2 crc bytes
 
-        buf.writeUInt8(address, 0);
-        buf.writeUInt8(code, 1);
-        buf.writeUInt16BE(dataAddress, 2);
+        if (address > 255) {
+            buf.writeUInt8(0xfa, 0);
+            buf.writeUInt16BE(address, 1);
+        } else {
+            buf.writeUInt8(address, 0);
+        }
+        buf.writeUInt8(code, offset + 1);
+        buf.writeUInt16BE(dataAddress, offset + 2);
 
         if (Buffer.isBuffer(value)) {
-            value.copy(buf, 4);
+            value.copy(buf, offset + 4);
         } else if (this._enron && !(dataAddress >= this._enronTables.shortRange[0] && dataAddress <= this._enronTables.shortRange[1])) {
             buf.writeUInt32BE(value, 4);
         } else {
-            buf.writeUInt16BE(value, 4);
+            buf.writeUInt16BE(value, offset + 4);
         }
 
         // add crc bytes to buffer
@@ -1025,13 +1046,16 @@ class ModbusRTU extends EventEmitter {
 
         const code = 16;
 
+        const offset = address > 255 ? 2 : 0;
+
         // set state variables
         this._transactions[this._port._transactionIdWrite] = {
             nextAddress: address,
             nextCode: code,
-            nextLength: 8,
+            nextLength: offset + 8,
             next: next
         };
+        // console.log(`this._transactions[${this._port._transactionIdWrite}]`, this._transactions[this._port._transactionIdWrite]);
 
         let dataLength = array.length;
         if (Buffer.isBuffer(array)) {
@@ -1039,21 +1063,26 @@ class ModbusRTU extends EventEmitter {
             dataLength = array.length / 2;
         }
 
-        const codeLength = 7 + 2 * dataLength;
+        const codeLength =  offset + 7 + 2 * dataLength;
         const buf = Buffer.alloc(codeLength + 2); // add 2 crc bytes
 
-        buf.writeUInt8(address, 0);
-        buf.writeUInt8(code, 1);
-        buf.writeUInt16BE(dataAddress, 2);
-        buf.writeUInt16BE(dataLength, 4);
-        buf.writeUInt8(dataLength * 2, 6);
+        if (address > 255) {
+            buf.writeUInt8(0xfa, 0);
+            buf.writeUInt16BE(address, 1);
+        } else {
+            buf.writeUInt8(address, 0);
+        }
+        buf.writeUInt8(code, offset + 1);
+        buf.writeUInt16BE(dataAddress, offset + 2);
+        buf.writeUInt16BE(dataLength, offset + 4);
+        buf.writeUInt8(dataLength * 2, offset + 6);
 
         // copy content of array to buf
         if (Buffer.isBuffer(array)) {
-            array.copy(buf, 7);
+            array.copy(buf, offset + 7);
         } else {
             for (let i = 0; i < dataLength; i++) {
-                buf.writeUInt16BE(array[i], 7 + 2 * i);
+                buf.writeUInt16BE(array[i], offset + 7 + 2 * i);
             }
         }
 

@@ -91,7 +91,8 @@ class RTUBufferedPort extends EventEmitter {
             // check if buffer include a complete modbus answer
             const expectedLength = self._length;
             let bufferLength = self._buffer.length;
-
+            console.log("expectedLength", expectedLength);
+            console.log("bufferLength", bufferLength);
 
             // check data length
             if (expectedLength !== LENGTH_UNKNOWN &&
@@ -109,10 +110,11 @@ class RTUBufferedPort extends EventEmitter {
             const maxOffset = bufferLength - EXCEPTION_LENGTH;
 
             for (let i = 0; i <= maxOffset; i++) {
-                const unitId = self._buffer[i];
-                const functionCode = self._buffer[i + 1];
+                const offset = self._id > 255 ? 2 : 0;                   
+                const unitId = offset === 2 ? self._buffer[offset + i - 1] * 256 + self._buffer[offset + i] : self._buffer[offset + i];
+                const functionCode = self._buffer[offset + i + 1];
 
-                if (unitId !== self._id) continue;
+                if ((self._id > 255 && self._buffer[i] !== 0xfa) || unitId !== self._id) continue;
 
                 if (functionCode === self._cmd && functionCode === READ_DEVICE_IDENTIFICATION_FUNCTION_CODE) {
                     if (bufferLength <= BITS_TO_NUM_OF_OBJECTS + i) {
@@ -200,9 +202,14 @@ class RTUBufferedPort extends EventEmitter {
 
         let length = null;
 
+        const offset = data.readUInt8(0) === 0xfa ? 2 : 0;
         // remember current unit and command
-        this._id = data[0];
-        this._cmd = data[1];
+        if (offset === 2) {
+            this._id = data[1] * 256 + data[2];
+        } else {
+            this._id = data[1];
+        }
+        this._cmd = data[offset + 1];
 
         // calculate expected answer length
         switch (this._cmd) {
@@ -213,14 +220,14 @@ class RTUBufferedPort extends EventEmitter {
                 break;
             case 3:
             case 4:
-                length = data.readUInt16BE(4);
-                this._length = 3 + 2 * length + 2;
+                length = data.readUInt16BE(offset + 4);
+                this._length = 3 + 2 * length + 2 + offset;
                 break;
             case 5:
             case 6:
             case 15:
             case 16:
-                this._length = 6 + 2;
+                this._length = 6 + 2 + offset;
                 break;
             case 17:
                 // response is device specific

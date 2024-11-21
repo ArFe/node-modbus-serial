@@ -281,7 +281,7 @@ Worker.prototype.poll = function({ unit, map, onProgress, maxChunkSize, skipErro
     skipErrors = Boolean(skipErrors);
     defaultType = defaultType || "int16";
 
-    if(unit < 1 || unit > 250 || isNaN(unit) || unit === undefined) {
+    if(unit < 1 || unit > 65535 || isNaN(unit) || unit === undefined) {
         throw new Error("invalid unit");
     }
 
